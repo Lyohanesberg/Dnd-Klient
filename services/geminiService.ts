@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Chat, Content, FunctionDeclaration, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Chat, Content, FunctionDeclaration, Type, Modality, GenerateContentResponse } from "@google/genai";
 import { Character, Message, Sender } from '../types';
 
 const API_KEY = process.env.API_KEY || '';
@@ -15,6 +15,32 @@ try {
 } catch (error) {
   console.error("Failed to initialize GoogleGenAI:", error);
 }
+
+// --- RETRY LOGIC ---
+
+const retryRequest = async <T>(
+  fn: () => Promise<T>, 
+  retries: number = 3, 
+  delay: number = 2000
+): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error: any) {
+    // Check for Rate Limit (429) or Service Unavailable (503)
+    const errorCode = error?.status || error?.code || error?.response?.status;
+    
+    // Sometimes the error object structure varies, check message too
+    const isRateLimit = errorCode === 429 || errorCode === 503 || 
+                        (error?.message && error.message.includes('429'));
+
+    if (isRateLimit && retries > 0) {
+      console.warn(`Gemini API Rate Limit (${errorCode}). Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryRequest(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+};
 
 // --- TOOLS DEFINITIONS ---
 
@@ -224,6 +250,11 @@ const MODEL_CONFIG = {
   topP: 0.95,
 };
 
+// Wrapper to safely send messages with retry logic
+export const sendWithRetry = async (chat: Chat, message: any): Promise<GenerateContentResponse> => {
+  return retryRequest(() => chat.sendMessage({ message }));
+};
+
 export const createDMSession = async (character: Character, summary?: string): Promise<Chat | null> => {
   if (!ai) return null;
 
@@ -305,7 +336,7 @@ export const generateCharacterAvatar = async (character: Character): Promise<str
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await retryRequest(() => ai!.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
         parts: [{ text: prompt }],
@@ -313,7 +344,7 @@ export const generateCharacterAvatar = async (character: Character): Promise<str
       config: {
         responseModalities: [Modality.IMAGE],
       },
-    });
+    }));
 
     const part = response.candidates?.[0]?.content?.parts?.[0];
     if (part && part.inlineData && part.inlineData.data) {
@@ -331,16 +362,17 @@ export const generateLocationImage = async (description: string): Promise<string
   if (!ai) return null;
 
   const prompt = `
-    Fantasy Environment Concept Art.
+    Top-down Tabletop RPG Battle Map.
     Scene: ${description}.
     
-    Style: Atmospheric, cinematic lighting, highly detailed, 8k, digital painting, D&D adventure module cover style.
-    Perspective: Wide shot, immersive.
-    No text, no UI.
+    Perspective: Orthographic top-down view (90 degrees), perfect for a 2D grid.
+    Style: High quality fantasy digital art, detailed textures, neutral lighting, realistic scale.
+    Constraint: NO GRID LINES on the image (grid is applied by overlay). NO UI elements.
+    The image should look like a playable battle map for D&D.
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await retryRequest(() => ai!.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
         parts: [{ text: prompt }],
@@ -348,7 +380,7 @@ export const generateLocationImage = async (description: string): Promise<string
       config: {
         responseModalities: [Modality.IMAGE],
       },
-    });
+    }));
 
     const part = response.candidates?.[0]?.content?.parts?.[0];
     if (part && part.inlineData && part.inlineData.data) {
@@ -385,10 +417,10 @@ export const generateStorySummary = async (currentSummary: string, recentMessage
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await retryRequest(() => ai!.models.generateContent({
       model: 'gemini-2.5-flash', // Use fast model for background tasks
       contents: prompt,
-    });
+    }));
 
     return response.text || currentSummary;
   } catch (error) {

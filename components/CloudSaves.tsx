@@ -1,10 +1,11 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
     isDriveConfigured, initGoogleServices, signInToGoogle, signOutFromGoogle, 
     listSaveFiles, saveGameToDrive, loadGameFromDrive, deleteGameFromDrive, setClientId
 } from '../services/googleDriveService';
 import { DriveFile } from '../types';
-import { Cloud, Download, Upload, Trash2, Loader2, X, Check, LogOut, Key, ExternalLink, Copy, ExternalLink as OpenIcon } from 'lucide-react';
+import { Cloud, Download, Upload, Trash2, Loader2, X, Check, LogOut, Key, ExternalLink, Copy, ExternalLink as OpenIcon, HardDrive, FileJson, Save } from 'lucide-react';
 
 interface CloudSavesProps {
   isOpen: boolean;
@@ -30,6 +31,7 @@ const CloudSaves: React.FC<CloudSavesProps> = ({ isOpen, onClose, getCurrentGame
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [tempClientId, setTempClientId] = useState("");
   const [currentOrigin, setCurrentOrigin] = useState("");
+  const [activeTab, setActiveTab] = useState<'cloud' | 'local'>('cloud');
 
   useEffect(() => {
     if (isOpen) {
@@ -154,6 +156,56 @@ const CloudSaves: React.FC<CloudSavesProps> = ({ isOpen, onClose, getCurrentGame
     }
   };
 
+  // --- Local File Handlers ---
+  const handleDownloadLocal = () => {
+      try {
+        const data = getCurrentGameState();
+        const fileName = `dnd_save_${data.character?.name?.replace(/\s+/g, '_') || 'hero'}_${new Date().toISOString().slice(0,10)}.json`;
+        const json = JSON.stringify(data, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const href = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = href;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setStatusMsg("Файл збережено на пристрій!");
+        setTimeout(() => setStatusMsg(null), 3000);
+      } catch (e) {
+          console.error(e);
+          setStatusMsg("Помилка створення файлу.");
+      }
+  };
+
+  const handleUploadLocal = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      setIsLoading(true);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+          try {
+              const result = event.target?.result;
+              if (typeof result === 'string') {
+                  const data = JSON.parse(result);
+                  onLoadGame(data);
+                  setStatusMsg("Файл успішно завантажено!");
+                  setTimeout(() => {
+                      onClose();
+                      setStatusMsg(null);
+                  }, 1500);
+              }
+          } catch (err) {
+              console.error(err);
+              setStatusMsg("Помилка читання файлу.");
+          } finally {
+              setIsLoading(false);
+          }
+      };
+      reader.readAsText(file);
+  };
+
   const copyOrigin = () => {
       navigator.clipboard.writeText(currentOrigin);
       setStatusMsg("URL скопійовано!");
@@ -173,11 +225,27 @@ const CloudSaves: React.FC<CloudSavesProps> = ({ isOpen, onClose, getCurrentGame
         {/* Header */}
         <div className="bg-gradient-to-r from-amber-950 to-stone-900 p-4 border-b border-amber-800 flex justify-between items-center shrink-0">
           <h2 className="text-xl text-amber-500 fantasy-font flex items-center gap-2 tracking-wider">
-             <Cloud className="w-6 h-6" /> Хмарні Збереження
+             <Save className="w-6 h-6" /> Меню Збережень
           </h2>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-200 transition-colors">
             <X className="w-6 h-6" />
           </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-stone-800 bg-stone-950">
+             <button 
+                onClick={() => setActiveTab('cloud')}
+                className={`flex-1 py-3 text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors ${activeTab === 'cloud' ? 'bg-stone-900 text-amber-500 border-b-2 border-amber-500' : 'text-stone-500 hover:text-stone-300 hover:bg-stone-900/50'}`}
+             >
+                 <Cloud className="w-4 h-4" /> Google Drive
+             </button>
+             <button 
+                onClick={() => setActiveTab('local')}
+                className={`flex-1 py-3 text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors ${activeTab === 'local' ? 'bg-stone-900 text-amber-500 border-b-2 border-amber-500' : 'text-stone-500 hover:text-stone-300 hover:bg-stone-900/50'}`}
+             >
+                 <HardDrive className="w-4 h-4" /> Цей Пристрій
+             </button>
         </div>
 
         {/* Content */}
@@ -196,179 +264,223 @@ const CloudSaves: React.FC<CloudSavesProps> = ({ isOpen, onClose, getCurrentGame
                 </div>
             )}
 
-            {!isConfigured ? (
-                 <div className="flex flex-col items-center justify-center flex-1 text-center space-y-6 animate-in zoom-in duration-300">
-                    <div className="p-4 bg-stone-900 rounded-full border border-stone-700 shadow-lg">
-                         <Key className="w-12 h-12 text-amber-600" />
+            {/* === LOCAL TAB === */}
+            {activeTab === 'local' && (
+                <div className="flex flex-col items-center justify-center flex-1 space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                     <div className="p-6 bg-stone-900 rounded-full border border-stone-700 relative shadow-lg">
+                        <FileJson className="w-16 h-16 text-stone-400" />
                     </div>
-                    
-                    <div>
-                        <h3 className="text-stone-200 font-bold text-lg">Налаштування Доступу</h3>
-                        <p className="text-stone-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">
-                           Для доступу до вашого Google Drive потрібен <b>Client ID</b>.
+
+                    <div className="space-y-2 text-center">
+                        <h3 className="text-stone-200 font-bold text-lg">Локальний файл (.json)</h3>
+                        <p className="text-stone-500 text-xs max-w-xs mx-auto">
+                           Збережіть гру у файл на цьому пристрої, щоб перенести її пізніше або зробити резервну копію.
                         </p>
                     </div>
 
-                    {/* Iframe Warning & Helper */}
-                    <div className="w-full bg-amber-900/20 border border-amber-900/50 rounded p-3 text-left space-y-3">
-                         <div className="flex items-start gap-2 text-amber-500 text-xs">
-                             <OpenIcon className="w-4 h-4 shrink-0 mt-0.5" />
-                             <p>Google блокує вхід через iframe. Якщо бачите помилку "OAuth Policy", відкрийте гру в новій вкладці:</p>
-                         </div>
+                    <div className="w-full max-w-xs space-y-4">
                          <button 
-                            onClick={openInNewWindow}
-                            className="w-full py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold rounded border border-stone-600 transition-colors"
+                            onClick={handleDownloadLocal}
+                            className="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-3 px-4 rounded shadow flex items-center justify-center gap-3 transition-transform hover:scale-[1.02]"
                          >
-                            Відкрити у окремому вікні
+                             <Download className="w-5 h-5" />
+                             Зберегти у файл
                          </button>
-                    </div>
 
-                    <div className="w-full bg-stone-900/50 border border-stone-800 rounded p-3 text-left">
-                        <p className="text-[10px] text-stone-500 uppercase font-bold mb-1">Ваш Authorized Origin (Скопіюйте в Google Console):</p>
-                        <div className="flex items-center gap-2">
-                            <code className="bg-black px-2 py-1 rounded text-amber-500 text-xs flex-1 truncate select-all">
-                                {currentOrigin}
-                            </code>
-                            <button 
-                                onClick={copyOrigin}
-                                className="text-stone-400 hover:text-white p-1"
-                                title="Копіювати"
-                            >
-                                <Copy className="w-3 h-3" />
-                            </button>
-                        </div>
+                         <div className="relative group w-full">
+                             <input 
+                                type="file" 
+                                accept=".json"
+                                onChange={handleUploadLocal}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                             />
+                             <button className="w-full bg-stone-800 group-hover:bg-stone-700 text-stone-300 font-bold py-3 px-4 rounded border border-stone-600 flex items-center justify-center gap-3 transition-colors">
+                                 <Upload className="w-5 h-5" />
+                                 Завантажити з файлу
+                             </button>
+                         </div>
                     </div>
+                </div>
+            )}
 
-                    <div className="w-full max-w-xs space-y-3">
-                        <div className="relative">
-                            <input 
-                                type="text" 
-                                value={tempClientId}
-                                onChange={(e) => setTempClientId(e.target.value)}
-                                placeholder="Вставте Client ID тут..."
-                                autoComplete="off"
-                                spellCheck="false"
-                                className="w-full bg-stone-800 border border-stone-600 text-stone-200 rounded px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                            />
+            {/* === CLOUD TAB === */}
+            {activeTab === 'cloud' && (
+                <>
+                {!isConfigured ? (
+                    <div className="flex flex-col items-center justify-center flex-1 text-center space-y-6 animate-in zoom-in duration-300">
+                        <div className="p-4 bg-stone-900 rounded-full border border-stone-700 shadow-lg">
+                            <Key className="w-12 h-12 text-amber-600" />
                         </div>
                         
+                        <div>
+                            <h3 className="text-stone-200 font-bold text-lg">Налаштування Доступу</h3>
+                            <p className="text-stone-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">
+                            Для доступу до вашого Google Drive потрібен <b>Client ID</b>.
+                            </p>
+                        </div>
+
+                        {/* Iframe Warning & Helper */}
+                        <div className="w-full bg-amber-900/20 border border-amber-900/50 rounded p-3 text-left space-y-3">
+                            <div className="flex items-start gap-2 text-amber-500 text-xs">
+                                <OpenIcon className="w-4 h-4 shrink-0 mt-0.5" />
+                                <p>Google блокує вхід через iframe. Якщо бачите помилку "OAuth Policy", відкрийте гру в новій вкладці:</p>
+                            </div>
+                            <button 
+                                onClick={openInNewWindow}
+                                className="w-full py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold rounded border border-stone-600 transition-colors"
+                            >
+                                Відкрити у окремому вікні
+                            </button>
+                        </div>
+
+                        <div className="w-full bg-stone-900/50 border border-stone-800 rounded p-3 text-left">
+                            <p className="text-[10px] text-stone-500 uppercase font-bold mb-1">Ваш Authorized Origin (Скопіюйте в Google Console):</p>
+                            <div className="flex items-center gap-2">
+                                <code className="bg-black px-2 py-1 rounded text-amber-500 text-xs flex-1 truncate select-all">
+                                    {currentOrigin}
+                                </code>
+                                <button 
+                                    onClick={copyOrigin}
+                                    className="text-stone-400 hover:text-white p-1"
+                                    title="Копіювати"
+                                >
+                                    <Copy className="w-3 h-3" />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="w-full max-w-xs space-y-3">
+                            <div className="relative">
+                                <input 
+                                    type="text" 
+                                    value={tempClientId}
+                                    onChange={(e) => setTempClientId(e.target.value)}
+                                    placeholder="Вставте Client ID тут..."
+                                    autoComplete="off"
+                                    spellCheck="false"
+                                    className="w-full bg-stone-800 border border-stone-600 text-stone-200 rounded px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                />
+                            </div>
+                            
+                            <button 
+                                onClick={handleSaveClientId}
+                                disabled={!tempClientId}
+                                className="w-full bg-amber-700 hover:bg-amber-600 disabled:bg-stone-800 disabled:text-stone-600 text-white font-bold py-2 px-4 rounded shadow transition-colors flex justify-center items-center gap-2"
+                            >
+                                <Check className="w-4 h-4" /> Зберегти ID
+                            </button>
+                            
+                            <a 
+                                href="https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid" 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="block text-[10px] text-stone-500 hover:text-amber-500 underline transition-colors mt-2"
+                            >
+                                <ExternalLink className="w-3 h-3 inline mr-1" />
+                                Як отримати Google Client ID?
+                            </a>
+                        </div>
+                    </div>
+                ) : !isSignedIn ? (
+                    <div className="flex flex-col items-center justify-center flex-1 text-center space-y-8 animate-in zoom-in duration-300">
+                        <div className="p-6 bg-stone-900 rounded-full border border-stone-700 relative group shadow-[0_0_30px_rgba(251,191,36,0.1)]">
+                            <div className="absolute inset-0 bg-amber-500/10 blur-xl rounded-full animate-pulse"></div>
+                            <Cloud className="w-20 h-20 text-stone-300 relative z-10" strokeWidth={1.5} />
+                        </div>
+                        
+                        <div className="space-y-3">
+                            <h3 className="text-stone-100 font-bold text-xl fantasy-font tracking-[0.15em]">GOOGLE DRIVE</h3>
+                            <p className="text-stone-500 text-sm max-w-xs mx-auto leading-relaxed">
+                                Синхронізуйте свої пригоди між світами (пристроями).
+                            </p>
+                        </div>
+
                         <button 
-                            onClick={handleSaveClientId}
-                            disabled={!tempClientId}
-                            className="w-full bg-amber-700 hover:bg-amber-600 disabled:bg-stone-800 disabled:text-stone-600 text-white font-bold py-2 px-4 rounded shadow transition-colors flex justify-center items-center gap-2"
+                            onClick={handleSignIn}
+                            className="bg-white hover:bg-stone-100 text-stone-900 font-bold py-3 px-8 rounded shadow-xl flex items-center gap-3 transition-transform hover:scale-105 border border-stone-300"
                         >
-                            <Check className="w-4 h-4" /> Зберегти ID
+                            <GoogleIcon />
+                            <span className="font-sans text-sm">Увійти в Google</span>
                         </button>
                         
-                        <a 
-                            href="https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid" 
-                            target="_blank" 
-                            rel="noreferrer"
-                            className="block text-[10px] text-stone-500 hover:text-amber-500 underline transition-colors mt-2"
+                        <button 
+                            onClick={() => { setClientId(''); setIsConfigured(false); }}
+                            className="text-[10px] text-stone-600 hover:text-red-500 underline"
                         >
-                            <ExternalLink className="w-3 h-3 inline mr-1" />
-                            Як отримати Google Client ID?
-                        </a>
-                    </div>
-                 </div>
-            ) : !isSignedIn ? (
-                <div className="flex flex-col items-center justify-center flex-1 text-center space-y-8 animate-in zoom-in duration-300">
-                    <div className="p-6 bg-stone-900 rounded-full border border-stone-700 relative group shadow-[0_0_30px_rgba(251,191,36,0.1)]">
-                        <div className="absolute inset-0 bg-amber-500/10 blur-xl rounded-full animate-pulse"></div>
-                        <Cloud className="w-20 h-20 text-stone-300 relative z-10" strokeWidth={1.5} />
-                    </div>
-                    
-                    <div className="space-y-3">
-                        <h3 className="text-stone-100 font-bold text-xl fantasy-font tracking-[0.15em]">GOOGLE DRIVE</h3>
-                        <p className="text-stone-500 text-sm max-w-xs mx-auto leading-relaxed">
-                            Синхронізуйте свої пригоди між світами (пристроями).
-                        </p>
-                    </div>
-
-                    <button 
-                        onClick={handleSignIn}
-                        className="bg-white hover:bg-stone-100 text-stone-900 font-bold py-3 px-8 rounded shadow-xl flex items-center gap-3 transition-transform hover:scale-105 border border-stone-300"
-                    >
-                        <GoogleIcon />
-                        <span className="font-sans text-sm">Увійти в Google</span>
-                    </button>
-                    
-                     <button 
-                        onClick={() => { setClientId(''); setIsConfigured(false); }}
-                        className="text-[10px] text-stone-600 hover:text-red-500 underline"
-                     >
-                        Змінити Client ID
-                     </button>
-                     
-                     <div className="mt-4 p-2 bg-stone-900 border border-stone-800 rounded text-[10px] text-stone-500 max-w-xs">
-                        Якщо вікно входу закривається миттєво або видає помилку — спробуйте відкрити гру у <button onClick={openInNewWindow} className="text-amber-500 underline">новій вкладці</button>.
-                     </div>
-                </div>
-            ) : (
-                <div className="flex flex-col flex-1 animate-in fade-in duration-300">
-                    <div className="flex items-center justify-between mb-4 border-b border-stone-800 pb-2">
-                        <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 bg-green-500 rounded-full shadow-[0_0_5px_#22c55e]"></div>
-                            <span className="text-xs text-stone-400 uppercase font-bold">Підключено</span>
-                        </div>
-                        <div className="flex gap-2">
-                             <button 
-                                onClick={handleSave}
-                                disabled={isLoading}
-                                className="bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold py-1.5 px-3 rounded flex items-center gap-2 shadow hover:shadow-amber-900/20 transition-all"
-                            >
-                                <Upload className="w-3 h-3" /> Зберегти
-                            </button>
-                            <button 
-                                onClick={handleSignOut}
-                                className="p-1.5 text-stone-500 hover:text-stone-300 hover:bg-stone-800 rounded transition-colors"
-                                title="Вийти з акаунту"
-                            >
-                                <LogOut className="w-4 h-4" />
-                            </button>
+                            Змінити Client ID
+                        </button>
+                        
+                        <div className="mt-4 p-2 bg-stone-900 border border-stone-800 rounded text-[10px] text-stone-500 max-w-xs">
+                            Якщо вікно входу закривається миттєво або видає помилку — спробуйте відкрити гру у <button onClick={openInNewWindow} className="text-amber-500 underline">новій вкладці</button>.
                         </div>
                     </div>
-
-                    <div className="flex-1 border border-stone-800 rounded bg-stone-900/30 overflow-y-auto custom-scrollbar max-h-[250px]">
-                        {files.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-full text-stone-600 space-y-2">
-                                <Cloud className="w-8 h-8 opacity-20" />
-                                <span className="text-xs italic">Папка збережень порожня.</span>
+                ) : (
+                    <div className="flex flex-col flex-1 animate-in fade-in duration-300">
+                        <div className="flex items-center justify-between mb-4 border-b border-stone-800 pb-2">
+                            <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-green-500 rounded-full shadow-[0_0_5px_#22c55e]"></div>
+                                <span className="text-xs text-stone-400 uppercase font-bold">Підключено</span>
                             </div>
-                        ) : (
-                            <ul className="divide-y divide-stone-800/50">
-                                {files.map((file) => (
-                                    <li key={file.id} className="p-3 flex items-center justify-between hover:bg-stone-800 transition-colors group">
-                                        <div className="flex flex-col overflow-hidden mr-4">
-                                            <span className="text-stone-300 text-sm font-bold truncate">
-                                                {file.name.replace('dnd_ai_save_', '').replace('.json', '').replace(/_/g, ' ')}
-                                            </span>
-                                            <span className="text-[10px] text-stone-500 flex items-center gap-1">
-                                                {file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() + ' ' + new Date(file.modifiedTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Unknown date'}
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
-                                            <button 
-                                                onClick={() => handleLoad(file.id)}
-                                                className="p-2 bg-stone-700 hover:bg-amber-600 text-white rounded shadow transition-colors"
-                                                title="Завантажити"
-                                            >
-                                                <Download className="w-3.5 h-3.5" />
-                                            </button>
-                                            <button 
-                                                onClick={() => handleDelete(file.id)}
-                                                className="p-2 bg-stone-700 hover:bg-red-900 text-white rounded shadow transition-colors"
-                                                title="Видалити"
-                                            >
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
-                                        </div>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={handleSave}
+                                    disabled={isLoading}
+                                    className="bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold py-1.5 px-3 rounded flex items-center gap-2 shadow hover:shadow-amber-900/20 transition-all"
+                                >
+                                    <Upload className="w-3 h-3" /> Зберегти
+                                </button>
+                                <button 
+                                    onClick={handleSignOut}
+                                    className="p-1.5 text-stone-500 hover:text-stone-300 hover:bg-stone-800 rounded transition-colors"
+                                    title="Вийти з акаунту"
+                                >
+                                    <LogOut className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 border border-stone-800 rounded bg-stone-900/30 overflow-y-auto custom-scrollbar max-h-[250px]">
+                            {files.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center h-full text-stone-600 space-y-2">
+                                    <Cloud className="w-8 h-8 opacity-20" />
+                                    <span className="text-xs italic">Папка збережень порожня.</span>
+                                </div>
+                            ) : (
+                                <ul className="divide-y divide-stone-800/50">
+                                    {files.map((file) => (
+                                        <li key={file.id} className="p-3 flex items-center justify-between hover:bg-stone-800 transition-colors group">
+                                            <div className="flex flex-col overflow-hidden mr-4">
+                                                <span className="text-stone-300 text-sm font-bold truncate">
+                                                    {file.name.replace('dnd_ai_save_', '').replace('.json', '').replace(/_/g, ' ')}
+                                                </span>
+                                                <span className="text-[10px] text-stone-500 flex items-center gap-1">
+                                                    {file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() + ' ' + new Date(file.modifiedTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Unknown date'}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
+                                                <button 
+                                                    onClick={() => handleLoad(file.id)}
+                                                    className="p-2 bg-stone-700 hover:bg-amber-600 text-white rounded shadow transition-colors"
+                                                    title="Завантажити"
+                                                >
+                                                    <Download className="w-3.5 h-3.5" />
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleDelete(file.id)}
+                                                    className="p-2 bg-stone-700 hover:bg-red-900 text-white rounded shadow transition-colors"
+                                                    title="Видалити"
+                                                >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
                     </div>
-                </div>
+                )}
+                </>
             )}
         </div>
       </div>

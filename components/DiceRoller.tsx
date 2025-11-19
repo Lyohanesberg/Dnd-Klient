@@ -1,6 +1,8 @@
+
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { CuboidIcon, TriangleIcon, HexagonIcon, Dna } from 'lucide-react'; 
+import { useAudio } from '../contexts/AudioContext';
 
 interface DiceRollerProps {
   onRoll: (result: string) => void;
@@ -12,11 +14,15 @@ const DiceRoller: React.FC<DiceRollerProps> = ({ onRoll }) => {
   const [rollingDie, setRollingDie] = useState<DieType | null>(null);
   const [rollResult, setRollResult] = useState<number | null>(null);
   const [showResult, setShowResult] = useState(false);
+  const { playSfx } = useAudio();
 
   const rollDie = (sides: DieType, name: string) => {
     setRollingDie(sides);
     setShowResult(false);
     setRollResult(null);
+    
+    // Start SFX
+    playSfx('dice_shake');
 
     // 1. Start Animation phase
     setTimeout(() => {
@@ -24,6 +30,9 @@ const DiceRoller: React.FC<DiceRollerProps> = ({ onRoll }) => {
       const result = Math.floor(Math.random() * sides) + 1;
       setRollResult(result);
       setShowResult(true);
+      
+      // Impact SFX
+      playSfx('dice_roll');
 
       // 3. Send to Chat after user sees it briefly
       setTimeout(() => {
@@ -104,8 +113,7 @@ const DiceRoller: React.FC<DiceRollerProps> = ({ onRoll }) => {
 
 const DieGraphic: React.FC<{sides: DieType, result: number | null}> = ({sides, result}) => {
     const baseClass = "w-full h-full drop-shadow-[0_0_15px_rgba(217,119,6,0.5)] filter";
-    const textClass = "fill-white text-4xl font-bold anchor-middle text-center dominant-baseline-middle drop-shadow-md";
-
+    
     // Inner function to render text centered
     const renderText = () => result !== null && (
         <text x="50%" y="55%" textAnchor="middle" dominantBaseline="middle" fontSize="40" fill="#fff" fontWeight="bold" style={{ textShadow: '2px 2px 4px #000' }}>
@@ -177,13 +185,11 @@ const DieGraphic: React.FC<{sides: DieType, result: number | null}> = ({sides, r
 const DieIcon4 = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><path d="M12 2L20 20H4L12 2Z" /></svg>;
 const DieIcon6 = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>;
 const DieIcon8 = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><path d="M12 2L22 12L12 22L2 12L12 2Z" /></svg>;
-const DieIcon10 = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><path d="M12 2L22 10L12 22L2 10L12 2Z" /></svg>; // Simplified
-const DieIcon12 = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><path d="M12 2L21 8.5V17.5L12 22L3 17.5V8.5L12 2Z" /></svg>; // Hex as proxy for D12
+const DieIcon10 = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><path d="M12 2L22 10L12 22L2 10L12 2Z" /></svg>;
+const DieIcon12 = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><path d="M12 2L21 8.5V17.5L12 22L3 17.5V8.5L12 2Z" /></svg>;
 
-// Updated D20 Icon - Solid/Filled look as requested
 const DieIcon20 = () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-8 h-8 drop-shadow-md">
-       {/* Solid background shapes to look like an 'image' */}
        <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="#92400e" stroke="#fcd34d" />
        <path d="M2 7V17L12 22L22 17V7L12 12L2 7Z" fill="#78350f" stroke="#fcd34d" />
        <path d="M12 22V12" stroke="#fcd34d" />

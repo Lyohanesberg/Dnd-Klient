@@ -75,6 +75,18 @@ export interface CombatState {
   combatants: Combatant[];
 }
 
+export interface TokenPosition {
+  x: number; // Grid coordinate X (0-N)
+  y: number; // Grid coordinate Y (0-N)
+}
+
+export interface MapToken {
+  id: string; // Usually matches combatant name
+  position: TokenPosition;
+  type: 'player' | 'enemy' | 'ally';
+  size: number; // 1 for medium (5ft), 2 for large (10ft)
+}
+
 export interface PendingRoll {
   callId: string;
   ability: string;

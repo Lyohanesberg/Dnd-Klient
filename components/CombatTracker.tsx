@@ -11,7 +11,7 @@ const CombatTracker: React.FC<CombatTrackerProps> = ({ combatState }) => {
   if (!combatState.isActive) return null;
 
   return (
-    <div className="fixed right-4 top-20 z-30 w-64 md:w-72 animate-in slide-in-from-right duration-500">
+    <div className="fixed right-4 top-32 md:top-36 z-30 w-64 md:w-72 animate-in slide-in-from-right duration-500">
       <div className="bg-stone-950/90 border-2 border-red-900 rounded-lg shadow-[0_0_20px_rgba(153,27,27,0.5)] overflow-hidden">
         {/* Header */}
         <div className="bg-gradient-to-r from-red-950 to-stone-900 p-3 border-b border-red-900 flex items-center justify-between">

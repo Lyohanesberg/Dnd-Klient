@@ -1,24 +1,27 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { createDMSession, resumeDMSession, generateLocationImage, generateStorySummary } from './services/geminiService';
+import { createDMSession, resumeDMSession, generateLocationImage, generateStorySummary, sendWithRetry } from './services/geminiService';
 import { Chat, GenerateContentResponse } from "@google/genai";
-import { Character, DEFAULT_CHARACTER, Message, Sender, PendingRoll, LocationState, Quest, CombatState, Note } from './types';
+import { Character, DEFAULT_CHARACTER, Message, Sender, PendingRoll, LocationState, Quest, CombatState, Note, MapToken, TokenPosition } from './types';
 import CharacterSheet from './components/CharacterSheet';
 import DiceRoller from './components/DiceRoller';
 import Journal from './components/Journal';
 import Typewriter from './components/Typewriter';
 import CombatTracker from './components/CombatTracker';
 import CloudSaves from './components/CloudSaves';
+import AudioController from './components/AudioController';
+import BattleMap from './components/BattleMap';
+import { AudioProvider, useAudio } from './contexts/AudioContext';
 import { 
   Send, Sword, Scroll, Loader2, 
-  Crosshair, Wand2, Music, Shield, Ghost, Axe, Hammer, Leaf, Skull, HandMetal, MapPin, Image as ImageIcon, Book, Cloud
+  Crosshair, Wand2, Music, Shield, Ghost, Axe, Hammer, Leaf, Skull, HandMetal, MapPin, Image as ImageIcon, Book, Cloud, Map as MapIcon, MessageSquare
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 // Simple utility to generate unique IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
-export default function App() {
+const AppContent = () => {
   const [character, setCharacter] = useState<Character>(DEFAULT_CHARACTER);
   const [gameStarted, setGameStarted] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -26,9 +29,11 @@ export default function App() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [storySummary, setStorySummary] = useState<string>("");
   const [combatState, setCombatState] = useState<CombatState>({ isActive: false, combatants: [] });
+  const [mapTokens, setMapTokens] = useState<MapToken[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'chat' | 'sheet'>('sheet');
+  const [viewMode, setViewMode] = useState<'chat' | 'map'>('chat'); // New Toggle for Map/Chat
   const [pendingRoll, setPendingRoll] = useState<PendingRoll | null>(null);
   const [showJournal, setShowJournal] = useState(false);
   const [showCloudSaves, setShowCloudSaves] = useState(false);
@@ -39,6 +44,9 @@ export default function App() {
     isGenerating: false
   });
   
+  // Audio Context
+  const { playTrack, playSfx, initializeAudio } = useAudio();
+
   // Chat session reference
   const chatSessionRef = useRef<Chat | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -46,7 +54,77 @@ export default function App() {
   // Scroll to bottom on new message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading, activeTab, pendingRoll]);
+  }, [messages, isLoading, activeTab, pendingRoll, viewMode]);
+
+  // --- AUDIO TRIGGERS ---
+  
+  // Switch music based on Combat State
+  useEffect(() => {
+      if (gameStarted) {
+          if (combatState.isActive) {
+              playTrack('combat');
+              playSfx('neutral'); // Alert sound
+              // Auto-switch to map on combat start if not already there
+              if (viewMode === 'chat') setViewMode('map');
+          } else {
+              playTrack('exploration');
+              if (viewMode === 'map') setViewMode('chat'); // Auto-back to chat (optional preference)
+          }
+      }
+  }, [combatState.isActive, gameStarted]);
+
+  // Optional: Switch music based on Location keywords (simple logic)
+  useEffect(() => {
+      if (!combatState.isActive && gameStarted) {
+          const desc = location.description.toLowerCase();
+          const name = location.name.toLowerCase();
+          
+          if (name.includes('таверн') || desc.includes('таверн') || desc.includes('людн') || desc.includes('місто')) {
+              playTrack('tavern');
+          } else if (name.includes('підземел') || desc.includes('темр') || desc.includes('страх')) {
+              playTrack('dungeon');
+          } else {
+              playTrack('exploration');
+          }
+      }
+  }, [location, combatState.isActive, gameStarted]);
+
+
+  // --- MAP SYNC LOGIC ---
+  // When combatants update, ensure they have tokens on the map
+  useEffect(() => {
+     if (combatState.isActive && combatState.combatants.length > 0) {
+         setMapTokens(prevTokens => {
+             const newTokens = [...prevTokens];
+             
+             combatState.combatants.forEach((c, idx) => {
+                 // Try to find existing token
+                 const existing = newTokens.find(t => t.id === c.name);
+                 if (!existing) {
+                     // Spawn positions: Players on left (x: 2-5), Enemies on right (x: 15-18)
+                     let x = c.type === 'player' ? 2 + (idx % 3) : 17 - (idx % 3);
+                     let y = 5 + idx; // Staggered Y
+                     
+                     newTokens.push({
+                         id: c.name,
+                         type: c.type,
+                         position: { x, y },
+                         size: 1
+                     });
+                 }
+             });
+             
+             // Remove tokens for combatants that are gone (unless we want to keep dead bodies? let's remove for now)
+             return newTokens.filter(t => combatState.combatants.some(c => c.name === t.id));
+         });
+     }
+  }, [combatState.combatants, combatState.isActive]);
+
+  const handleMoveToken = (id: string, newPos: TokenPosition) => {
+      setMapTokens(prev => prev.map(t => t.id === id ? { ...t, position: newPos } : t));
+      playSfx('click');
+  };
+
 
   // --- AUTO-SUMMARIZATION LOGIC ---
   // Trigger summary update every 10 messages to keep memory fresh
@@ -93,6 +171,7 @@ export default function App() {
       notes,
       storySummary,
       combatState,
+      mapTokens,
       timestamp: Date.now()
     };
   };
@@ -101,8 +180,10 @@ export default function App() {
     const gameState = getGameState();
     try {
       localStorage.setItem('dnd_campaign_save', JSON.stringify(gameState));
+      playSfx('success');
     } catch (e) {
       console.error("Failed to save game locally", e);
+      playSfx('error');
     }
   };
 
@@ -116,9 +197,11 @@ export default function App() {
         if (gameState.notes) setNotes(gameState.notes);
         if (gameState.storySummary) setStorySummary(gameState.storySummary);
         if (gameState.combatState) setCombatState(gameState.combatState);
+        if (gameState.mapTokens) setMapTokens(gameState.mapTokens);
         
         setGameStarted(true);
         setActiveTab('chat');
+        initializeAudio(); // Start audio engine on load
   
         // Reconnect to AI with history AND summary
         const session = await resumeDMSession(
@@ -135,6 +218,7 @@ export default function App() {
             sender: Sender.System,
             timestamp: Date.now()
           }]);
+          playSfx('success');
         } else {
            setMessages(prev => [...prev, {
             id: generateId(),
@@ -147,6 +231,7 @@ export default function App() {
       } catch (e) {
         console.error("Failed to parse loaded game", e);
         alert("Помилка обробки файлу збереження.");
+        playSfx('error');
       }
   };
 
@@ -169,6 +254,7 @@ export default function App() {
   };
 
   const startGame = async () => {
+    initializeAudio(); // User interaction triggers audio context unlock
     setIsLoading(true);
     setGameStarted(true);
     setActiveTab('chat');
@@ -225,6 +311,8 @@ export default function App() {
       const changeStr = amount > 0 ? `+${amount}` : `${amount}`;
       const msgText = `HP змінено: ${changeStr} (${reason})`;
       
+      if (amount < 0) playSfx('error'); // Damage sound
+      
       setMessages(prev => [...prev, {
         id: generateId(),
         text: `**[Система]:** ${msgText}`,
@@ -256,6 +344,8 @@ export default function App() {
         sender: Sender.System,
         timestamp: Date.now()
       }]);
+      
+      playSfx('click'); 
 
       result = `Success. Item ${action}ed.`;
     }
@@ -292,8 +382,14 @@ export default function App() {
 
         let statusMsg = "";
         if (status === 'active') statusMsg = "Новий Квест";
-        if (status === 'completed') statusMsg = "Квест Виконано";
-        if (status === 'failed') statusMsg = "Квест Провалено";
+        if (status === 'completed') { 
+            statusMsg = "Квест Виконано";
+            playSfx('success');
+        }
+        if (status === 'failed') {
+            statusMsg = "Квест Провалено";
+            playSfx('error');
+        }
 
         setMessages(prev => [...prev, {
             id: generateId(),
@@ -322,6 +418,8 @@ export default function App() {
           sender: Sender.System,
           timestamp: Date.now()
         }]);
+        
+        playSfx('click');
 
         result = "Note added to journal.";
     }
@@ -395,6 +493,7 @@ export default function App() {
              reason: (call.args as any).reason,
              otherResponses: functionResponses // Store other auto-results to send back later
            });
+           playSfx('neutral'); // Notification sound
         } else {
            // Execute auto-tool
            const result = executeFunctionCall(call.name, call.args);
@@ -418,7 +517,7 @@ export default function App() {
 
       // If only auto-tools, send results back and continue
       setIsLoading(true);
-      currentResponse = await chatSessionRef.current!.sendMessage({ message: functionResponses });
+      currentResponse = await sendWithRetry(chatSessionRef.current!, functionResponses);
       
       if (currentResponse.text) {
         setMessages(prev => [...prev, {
@@ -449,7 +548,7 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      const response = await chatSessionRef.current.sendMessage({ message: content });
+      const response = await sendWithRetry(chatSessionRef.current, content);
       await processAIResponse(response);
     } catch (error) {
       console.error(error);
@@ -483,7 +582,7 @@ export default function App() {
     const allResponses = [...pendingRoll.otherResponses, rollResponse];
 
     try {
-      const response = await chatSessionRef.current.sendMessage({ message: allResponses });
+      const response = await sendWithRetry(chatSessionRef.current, allResponses);
       await processAIResponse(response);
     } catch (error) {
       console.error("Error resolving roll:", error);
@@ -558,6 +657,9 @@ export default function App() {
         
         {/* Header Actions */}
         <div className="flex items-center gap-2">
+           {/* Audio Controls */}
+           {gameStarted && <AudioController />}
+        
            <button
               onClick={() => setShowCloudSaves(true)}
               className="p-2 rounded hover:bg-stone-800 text-stone-400 hover:text-amber-500 transition-colors"
@@ -620,7 +722,7 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Right Panel: Chat Interface */}
+        {/* Right Panel: Chat OR Map Interface */}
         {gameStarted && (
           <section 
             className={`
@@ -636,7 +738,7 @@ export default function App() {
                 ${combatState.isActive ? 'bg-red-950/80 shadow-[inset_0_0_100px_rgba(220,38,38,0.3)]' : 'bg-stone-950/90'}
             `} />
 
-            {/* Location Header */}
+            {/* Location Header & View Toggles */}
             <div className="relative z-10 flex items-center justify-between px-6 py-3 bg-gradient-to-b from-black/80 to-transparent shrink-0">
                 <div className="flex items-center gap-3">
                     <MapPin className="w-5 h-5 text-amber-500" />
@@ -651,65 +753,102 @@ export default function App() {
                         )}
                     </div>
                 </div>
+                
+                {/* View Switcher (Chat / Map) */}
+                <div className="flex bg-black/50 rounded-lg p-1 backdrop-blur-md border border-stone-700">
+                     <button 
+                        onClick={() => setViewMode('chat')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wider transition-colors ${viewMode === 'chat' ? 'bg-stone-700 text-amber-500 shadow' : 'text-stone-400 hover:text-stone-200'}`}
+                     >
+                        <MessageSquare className="w-3 h-3" /> Чат
+                     </button>
+                     <button 
+                        onClick={() => setViewMode('map')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wider transition-colors ${viewMode === 'map' ? 'bg-stone-700 text-amber-500 shadow' : 'text-stone-400 hover:text-stone-200'}`}
+                     >
+                        <MapIcon className="w-3 h-3" /> Мапа
+                     </button>
+                </div>
             </div>
             
-            {/* Chat History */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-6 pb-32 relative z-10 scrollbar-thin scrollbar-thumb-stone-700 scrollbar-track-transparent">
-              {messages.map((msg, index) => {
-                 // Determine if we should use Typewriter effect:
-                 // It must be the LAST message, it must be from AI, and not an error.
-                 const isLastMessage = index === messages.length - 1;
-                 const isAI = msg.sender === Sender.AI;
-                 
-                 return (
-                  <div 
-                    key={msg.id} 
-                    className={`flex ${msg.sender === Sender.User ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className={`
-                      max-w-[90%] md:max-w-[80%] rounded-lg p-4 text-base leading-relaxed shadow-lg backdrop-blur-sm
-                      ${msg.sender === Sender.User 
-                        ? 'bg-stone-800/90 text-stone-200 border border-stone-600 rounded-br-none' 
-                        : msg.sender === Sender.System
-                          ? 'bg-stone-900/80 text-amber-500 text-sm italic border border-dashed border-amber-900 w-full text-center'
-                          : 'bg-stone-950/85 text-stone-300 border border-amber-900/50 rounded-bl-none shadow-amber-900/10'}
-                      ${msg.isError ? 'border-red-800 text-red-400' : ''}
-                    `}>
-                      {msg.sender === Sender.AI && (
-                        <div className="text-amber-700 text-xs font-bold mb-1 uppercase tracking-wider flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-amber-600"></span> DM
-                        </div>
-                      )}
-                      {msg.sender === Sender.User && (
-                        <div className="text-stone-500 text-xs font-bold mb-1 uppercase tracking-wider text-right">
-                          {character.name}
-                        </div>
-                      )}
-                      
-                      {isLastMessage && isAI && !msg.isError ? (
-                         <Typewriter text={msg.text} onComplete={() => { /* Optional: trigger sfx */ }} />
-                      ) : (
-                         <div className="markdown-content prose prose-invert prose-p:my-1 prose-strong:text-amber-500 prose-em:text-stone-400">
-                            <ReactMarkdown>{msg.text}</ReactMarkdown>
-                         </div>
-                      )}
-                    </div>
-                  </div>
-                 );
-              })}
-              
-              {isLoading && !pendingRoll && (
-                <div className="flex justify-start animate-pulse">
-                  <div className="bg-stone-900/90 rounded-lg p-4 border border-stone-800 flex items-center gap-3">
-                    <Loader2 className="w-5 h-5 text-amber-600 animate-spin" />
-                    <span className="text-stone-500 text-sm italic">Майстер думає...</span>
-                  </div>
+            {/* --- MAP VIEW --- */}
+            {viewMode === 'map' && (
+                <div className="flex-1 relative z-10 p-4 overflow-hidden">
+                     <div className="w-full h-full bg-stone-900 border border-stone-700 rounded-lg overflow-hidden shadow-2xl">
+                         <BattleMap 
+                            tokens={mapTokens}
+                            combatants={combatState.combatants}
+                            backgroundImage={location.imageUrl}
+                            onMoveToken={handleMoveToken}
+                         />
+                     </div>
+                     {/* Simple chat overlay for latest message in Map Mode */}
+                     <div className="absolute bottom-4 left-4 right-4 bg-black/80 backdrop-blur p-3 rounded border border-stone-700 text-sm text-stone-300 max-h-24 overflow-y-auto pointer-events-none">
+                        <span className="text-amber-500 font-bold text-xs mr-2">Останнє:</span>
+                        {messages.length > 0 ? messages[messages.length - 1].text.slice(0, 150) + (messages[messages.length - 1].text.length > 150 ? '...' : '') : '...'}
+                     </div>
                 </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
+            )}
 
-            {/* Pending Roll Overlay/Modal */}
+            {/* --- CHAT VIEW --- */}
+            {viewMode === 'chat' && (
+                <div className="flex-1 overflow-y-auto p-4 space-y-6 pb-4 relative z-10 scrollbar-thin scrollbar-thumb-stone-700 scrollbar-track-transparent">
+                {messages.map((msg, index) => {
+                    // Determine if we should use Typewriter effect:
+                    // It must be the LAST message, it must be from AI, and not an error.
+                    const isLastMessage = index === messages.length - 1;
+                    const isAI = msg.sender === Sender.AI;
+                    
+                    return (
+                    <div 
+                        key={msg.id} 
+                        className={`flex ${msg.sender === Sender.User ? 'justify-end' : 'justify-start'}`}
+                    >
+                        <div className={`
+                        max-w-[90%] md:max-w-[80%] rounded-lg p-4 text-base leading-relaxed shadow-lg backdrop-blur-sm
+                        ${msg.sender === Sender.User 
+                            ? 'bg-stone-800/90 text-stone-200 border border-stone-600 rounded-br-none' 
+                            : msg.sender === Sender.System
+                            ? 'bg-stone-900/80 text-amber-500 text-sm italic border border-dashed border-amber-900 w-full text-center'
+                            : 'bg-stone-950/85 text-stone-300 border border-amber-900/50 rounded-bl-none shadow-amber-900/10'}
+                        ${msg.isError ? 'border-red-800 text-red-400' : ''}
+                        `}>
+                        {msg.sender === Sender.AI && (
+                            <div className="text-amber-700 text-xs font-bold mb-1 uppercase tracking-wider flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-amber-600"></span> DM
+                            </div>
+                        )}
+                        {msg.sender === Sender.User && (
+                            <div className="text-stone-500 text-xs font-bold mb-1 uppercase tracking-wider text-right">
+                            {character.name}
+                            </div>
+                        )}
+                        
+                        {isLastMessage && isAI && !msg.isError ? (
+                            <Typewriter text={msg.text} onComplete={() => { /* Optional: trigger sfx */ }} />
+                        ) : (
+                            <div className="markdown-content prose prose-invert prose-p:my-1 prose-strong:text-amber-500 prose-em:text-stone-400">
+                                <ReactMarkdown>{msg.text}</ReactMarkdown>
+                            </div>
+                        )}
+                        </div>
+                    </div>
+                    );
+                })}
+                
+                {isLoading && !pendingRoll && (
+                    <div className="flex justify-start animate-pulse">
+                    <div className="bg-stone-900/90 rounded-lg p-4 border border-stone-800 flex items-center gap-3">
+                        <Loader2 className="w-5 h-5 text-amber-600 animate-spin" />
+                        <span className="text-stone-500 text-sm italic">Майстер думає...</span>
+                    </div>
+                    </div>
+                )}
+                <div ref={messagesEndRef} />
+                </div>
+            )}
+
+            {/* Pending Roll Overlay/Modal (Shows in both modes) */}
             {pendingRoll && (
                 <div className="absolute top-16 left-4 right-4 md:left-1/4 md:right-1/4 z-40 animate-in zoom-in duration-300">
                     <div className="bg-stone-900/95 border-2 border-amber-500 rounded-lg p-6 shadow-[0_0_50px_rgba(245,158,11,0.3)] flex flex-col items-center text-center gap-4 backdrop-blur-md">
@@ -726,7 +865,7 @@ export default function App() {
                 </div>
             )}
 
-            {/* Input Area */}
+            {/* Input Area (Always visible) */}
             <div className="bg-stone-950 p-0 shrink-0 z-30 relative border-t border-stone-800">
               <DiceRoller onRoll={(msg) => handleDiceRoll(msg)} />
               
@@ -755,6 +894,14 @@ export default function App() {
       </main>
     </div>
   );
+};
+
+export default function App() {
+    return (
+        <AudioProvider>
+            <AppContent />
+        </AudioProvider>
+    );
 }
 
 // Little local component for Sparkles to reuse same sizing
